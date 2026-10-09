@@ -1,13 +1,9 @@
 """
 config.py
 =========
-Centralised configuration and LLM provider factory.
 
-All settings are loaded from environment variables via pydantic-settings.
-No magic numbers or hardcoded values should exist anywhere else in the
-codebase — import from here instead.
-
-PEP 8 | OOP | Single Responsibility
+Centralized configuration and model factories.
+Settings are loaded from the local .env file.
 """
 
 from __future__ import annotations
@@ -26,7 +22,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMProvider(str, Enum):
-    """Supported LLM backend providers."""
+    """Supported LLM providers."""
 
     GROQ = "groq"
     OLLAMA = "ollama"
@@ -34,7 +30,7 @@ class LLMProvider(str, Enum):
 
 
 class EmbeddingProvider(str, Enum):
-    """Supported embedding backend providers."""
+    """Supported embedding providers."""
 
     LOCAL = "local"
     OPENAI = "openai"
@@ -46,12 +42,7 @@ class EmbeddingProvider(str, Enum):
 
 
 class Settings(BaseSettings):
-    """
-    Application settings loaded from environment variables.
-
-    All fields map directly to entries in .env.example.
-    Validation is handled automatically by pydantic-settings.
-    """
+    """Application settings loaded from environment variables and .env."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -62,54 +53,83 @@ class Settings(BaseSettings):
 
     # LLM provider
     llm_provider: LLMProvider = LLMProvider.GROQ
-    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
-    groq_model: str = Field(default="llama-3.1-8b-instant", alias="GROQ_MODEL")
+
+    groq_api_key: str = Field(
+        default="",
+        alias="GROQ_API_KEY",
+    )
+    groq_model: str = Field(
+        default="llama-3.1-8b-instant",
+        alias="GROQ_MODEL",
+    )
+
     ollama_base_url: str = Field(
-        default="http://localhost:11434", alias="OLLAMA_BASE_URL"
+        default="http://localhost:11434",
+        alias="OLLAMA_BASE_URL",
     )
-    ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
+    ollama_model: str = Field(
+        default="llama3.2",
+        alias="OLLAMA_MODEL",
+    )
+
     lmstudio_base_url: str = Field(
-        default="http://localhost:1234/v1", alias="LMSTUDIO_BASE_URL"
+        default="http://localhost:1234/v1",
+        alias="LMSTUDIO_BASE_URL",
     )
-    lmstudio_model: str = Field(default="local-model", alias="LMSTUDIO_MODEL")
+    lmstudio_model: str = Field(
+        default="local-model",
+        alias="LMSTUDIO_MODEL",
+    )
 
     # Embeddings
     embedding_provider: EmbeddingProvider = EmbeddingProvider.LOCAL
     embedding_model: str = Field(
-        default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL"
+        default="all-MiniLM-L6-v2",
+        alias="EMBEDDING_MODEL",
     )
 
     # Vector store
-    chroma_db_path: str = Field(default="./data/chroma_db", alias="CHROMA_DB_PATH")
+    chroma_db_path: str = Field(
+        default="./data/chroma_db",
+        alias="CHROMA_DB_PATH",
+    )
     chroma_collection_name: str = Field(
-        default="deep_learning_corpus", alias="CHROMA_COLLECTION_NAME"
+        default="deep_learning_corpus",
+        alias="CHROMA_COLLECTION_NAME",
     )
 
     # Retrieval
-    retrieval_k: int = Field(default=4, alias="RETRIEVAL_K")
+    retrieval_k: int = Field(
+        default=4,
+        alias="RETRIEVAL_K",
+    )
     similarity_threshold: float = Field(
-        default=0.3, alias="SIMILARITY_THRESHOLD"
+        default=0.3,
+        alias="SIMILARITY_THRESHOLD",
     )
     max_context_tokens: int = Field(
-        default=3000, alias="MAX_CONTEXT_TOKENS"
+        default=3000,
+        alias="MAX_CONTEXT_TOKENS",
     )
 
     # Application
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    app_title: str = Field(
-        default="Deep Learning Interview Prep Agent", alias="APP_TITLE"
+    log_level: str = Field(
+        default="INFO",
+        alias="LOG_LEVEL",
     )
-    corpus_dir: str = Field(default="./data/corpus", alias="CORPUS_DIR")
+    app_title: str = Field(
+        default="Deep Learning Interview Prep Agent",
+        alias="APP_TITLE",
+    )
+    corpus_dir: str = Field(
+        default="./data/corpus",
+        alias="CORPUS_DIR",
+    )
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """
-    Return the singleton Settings instance.
-
-    Uses lru_cache so the .env file is only parsed once per process.
-    Call get_settings() anywhere in the codebase to access configuration.
-    """
+    """Load settings once per process and reuse them."""
     return Settings()
 
 
@@ -119,41 +139,13 @@ def get_settings() -> Settings:
 
 
 class LLMFactory:
-    """
-    Creates and returns a configured LangChain chat model based on the
-    active LLM_PROVIDER environment variable.
-
-    Swapping providers requires only a .env change — no code changes.
-    This is the abstraction pattern interviewers look for when asking
-    about configurable, production-ready systems.
-
-    Example
-    -------
-    >>> factory = LLMFactory()
-    >>> llm = factory.create()
-    >>> response = llm.invoke("Explain backpropagation in one sentence.")
-    """
+    """Create a chat model using the configured LLM provider."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
 
     def create(self) -> BaseChatModel:
-        """
-        Instantiate and return the configured chat model.
-
-        Returns
-        -------
-        BaseChatModel
-            A LangChain-compatible chat model ready for use in chains
-            and LangGraph nodes.
-
-        Raises
-        ------
-        ValueError
-            If the configured provider is not supported.
-        EnvironmentError
-            If required credentials are missing for the chosen provider.
-        """
+        """Return the configured chat model."""
         provider = self._settings.llm_provider
 
         if provider == LLMProvider.GROQ:
@@ -166,46 +158,28 @@ class LLMFactory:
             raise ValueError(f"Unsupported LLM provider: {provider}")
 
     def _create_groq(self) -> BaseChatModel:
-        """
-        Create a Groq-backed chat model.
+        """Create the Groq chat model using settings from .env."""
+        from langchain_groq import ChatGroq
 
-        Requires GROQ_API_KEY in environment.
-        Recommended models: llama-3.1-8b-instant (fast), llama-3.1-70b-versatile (quality)
+        if not self._settings.groq_api_key.strip():
+            raise EnvironmentError(
+                "GROQ_API_KEY is missing. Add it to your .env file."
+            )
 
-        Interview talking point: Groq uses LPU (Language Processing Unit)
-        inference for significantly lower latency than GPU-based inference.
-        """
-        # TODO: implement using langchain_groq.ChatGroq
-        raise NotImplementedError
+        return ChatGroq(
+            model=self._settings.groq_model,
+            api_key=self._settings.groq_api_key,
+            temperature=0,
+        )
 
     def _create_ollama(self) -> BaseChatModel:
-        """
-        Create a locally-hosted Ollama chat model.
-
-        No API key required. Ollama must be running: `ollama serve`
-        Pull your model first: `ollama pull llama3.2`
-
-        Interview talking point: local inference eliminates data privacy
-        concerns and removes API cost and latency entirely.
-        """
+        """Optional: create a locally hosted Ollama chat model."""
         # TODO: implement using langchain_ollama.ChatOllama
         raise NotImplementedError
 
     def _create_lmstudio(self) -> BaseChatModel:
-        """
-        Create an LM Studio chat model via its OpenAI-compatible local server.
-
-        No API key required. LM Studio must be running with a model loaded
-        and the local server started on port 1234.
-
-        Uses langchain_openai.ChatOpenAI with a custom base_url pointing
-        to the local LM Studio server endpoint.
-
-        Interview talking point: OpenAI-compatible APIs allow any
-        OpenAI-native tooling to work with self-hosted models without
-        code changes — just a base_url swap.
-        """
-        # TODO: implement using langchain_openai.ChatOpenAI with base_url override
+        """Optional: create a chat model using LM Studio."""
+        # TODO: implement using langchain_openai.ChatOpenAI
         raise NotImplementedError
 
 
@@ -215,36 +189,13 @@ class LLMFactory:
 
 
 class EmbeddingFactory:
-    """
-    Creates and returns a configured LangChain embedding model.
-
-    Local embeddings via sentence-transformers require no API key and
-    run entirely on CPU — appropriate for development and class use.
-
-    Example
-    -------
-    >>> factory = EmbeddingFactory()
-    >>> embeddings = factory.create()
-    >>> vector = embeddings.embed_query("What is backpropagation?")
-    """
+    """Create an embedding model using the configured provider."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
 
     def create(self):
-        """
-        Instantiate and return the configured embedding model.
-
-        Returns
-        -------
-        Embeddings
-            A LangChain-compatible embedding model.
-
-        Raises
-        ------
-        ValueError
-            If the configured provider is not supported.
-        """
+        """Return the configured embedding model."""
         provider = self._settings.embedding_provider
 
         if provider == EmbeddingProvider.LOCAL:
@@ -255,25 +206,16 @@ class EmbeddingFactory:
             raise ValueError(f"Unsupported embedding provider: {provider}")
 
     def _create_local(self):
-        """
-        Create a local sentence-transformers embedding model.
+        """Create the local model used to embed document text."""
+        from langchain_community.embeddings import HuggingFaceEmbeddings
 
-        First run downloads the model (~90MB for all-MiniLM-L6-v2).
-        Subsequent runs load from cache. Use st.cache_resource or
-        equivalent to avoid reloading on every UI interaction.
-
-        Interview talking point: local embeddings mean the corpus content
-        never leaves the machine — important for proprietary datasets.
-        """
-        # TODO: implement using langchain_community.embeddings.HuggingFaceEmbeddings
-        raise NotImplementedError
+        return HuggingFaceEmbeddings(
+            model_name=self._settings.embedding_model,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
 
     def _create_openai(self):
-        """
-        Create an OpenAI embedding model (text-embedding-3-small).
-
-        Requires OPENAI_API_KEY. Higher quality than local models
-        but incurs API cost per embedding call.
-        """
+        """Optional: create an OpenAI embedding model."""
         # TODO: implement using langchain_openai.OpenAIEmbeddings
         raise NotImplementedError

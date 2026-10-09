@@ -1,18 +1,19 @@
 """
 chunker.py
 ==========
-Document loading and chunking pipeline.
 
-Handles ingestion of raw files (PDF and Markdown) into structured
-DocumentChunk objects ready for embedding and vector store storage.
-
-PEP 8 | OOP | Single Responsibility
+Load Markdown documents and split them into DocumentChunk objects.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 from loguru import logger
 
 from rag_agent.agent.state import ChunkMetadata, DocumentChunk
@@ -21,32 +22,9 @@ from rag_agent.vectorstore.store import VectorStoreManager
 
 
 class DocumentChunker:
-    """
-    Loads raw documents and splits them into DocumentChunk objects.
+    """Load documents and prepare chunks for embedding and storage."""
 
-    Supports PDF and Markdown file formats. Chunking strategy uses
-    recursive character splitting with configurable chunk size and
-    overlap — both are interview-defensible parameters.
-
-    Parameters
-    ----------
-    settings : Settings, optional
-        Application settings.
-
-    Example
-    -------
-    >>> chunker = DocumentChunker()
-    >>> chunks = chunker.chunk_file(
-    ...     Path("data/corpus/lstm.md"),
-    ...     metadata_overrides={"topic": "LSTM", "difficulty": "intermediate"}
-    ... )
-    >>> print(f"Produced {len(chunks)} chunks")
-    """
-
-    # Default chunking parameters — justify these in your architecture diagram.
-    # chunk_size: 512 tokens balances context richness with retrieval precision.
-    # chunk_overlap: 50 tokens prevents concepts that span chunk boundaries
-    # from being lost entirely. A common interview question.
+    # These values measure characters, not tokens.
     DEFAULT_CHUNK_SIZE = 512
     DEFAULT_CHUNK_OVERLAP = 50
 
@@ -64,73 +42,89 @@ class DocumentChunker:
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     ) -> list[DocumentChunk]:
-        """
-        Load a file and split it into DocumentChunks.
+        """Load one file and create chunks with metadata and stable IDs."""
+        file_path = Path(file_path)
 
-        Automatically detects file type and routes to the appropriate
-        loader. Applies metadata_overrides on top of auto-detected
-        metadata where provided.
+        if not file_path.is_file():
+            raise FileNotFoundError(
+                f"File does not exist: {file_path}"
+            )
 
-        Parameters
-        ----------
-        file_path : Path
-            Absolute or relative path to the source file.
-        metadata_overrides : dict, optional
-            Metadata fields to set or override. Keys must match
-            ChunkMetadata field names. Commonly used to set topic
-            and difficulty when the file does not encode these.
-        chunk_size : int
-            Maximum characters per chunk.
-        chunk_overlap : int
-            Characters of overlap between adjacent chunks.
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero.")
 
-        Returns
-        -------
-        list[DocumentChunk]
-            Fully prepared chunks with deterministic IDs and metadata.
+        if not 0 <= chunk_overlap < chunk_size:
+            raise ValueError(
+                "chunk_overlap must be at least zero "
+                "and smaller than chunk_size."
+            )
 
-        Raises
-        ------
-        ValueError
-            If the file type is not supported.
-        FileNotFoundError
-            If the file does not exist at the given path.
-        """
-        # TODO: implement
-        # 1. Validate file exists
-        # 2. Route to _chunk_pdf or _chunk_markdown based on suffix
-        # 3. Apply metadata_overrides
-        # 4. Generate chunk_ids using VectorStoreManager.generate_chunk_id
-        # 5. Return list[DocumentChunk]
-        raise NotImplementedError
+        suffix = file_path.suffix.lower()
+
+        if suffix == ".md":
+            raw_chunks = self._chunk_markdown(
+                file_path,
+                chunk_size,
+                chunk_overlap,
+            )
+        elif suffix == ".pdf":
+            raw_chunks = self._chunk_pdf(
+                file_path,
+                chunk_size,
+                chunk_overlap,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported file type: {suffix}. "
+                "Use a .md file for this workshop."
+            )
+
+        metadata = self._infer_metadata(
+            file_path,
+            metadata_overrides,
+        )
+
+        chunks: list[DocumentChunk] = []
+
+        for raw_chunk in raw_chunks:
+            text = raw_chunk["text"].strip()
+
+            if not text:
+                continue
+
+            chunk_id = VectorStoreManager.generate_chunk_id(
+                metadata.source,
+                text,
+            )
+
+            chunks.append(
+                DocumentChunk(
+                    chunk_id=chunk_id,
+                    chunk_text=text,
+                    metadata=replace(
+                        metadata,
+                        related_topics=list(metadata.related_topics),
+                    ),
+                )
+            )
+
+        logger.info(
+            "Created {} chunks from '{}'.",
+            len(chunks),
+            metadata.source,
+        )
+
+        return chunks
 
     def chunk_files(
         self,
         file_paths: list[Path],
         metadata_overrides: dict | None = None,
     ) -> list[DocumentChunk]:
-        """
-        Chunk multiple files in a single call.
-
-        Used by the UI multi-file upload handler to process all
-        uploaded files before passing to VectorStoreManager.ingest().
-
-        Parameters
-        ----------
-        file_paths : list[Path]
-            List of file paths to process.
-        metadata_overrides : dict, optional
-            Applied to all files. Per-file metadata should be handled
-            by calling chunk_file() individually.
-
-        Returns
-        -------
-        list[DocumentChunk]
-            Combined chunks from all files, preserving source attribution
-            in each chunk's metadata.
-        """
-        # TODO: implement — iterate and collect, handle per-file errors
-        raise NotImplementedError
+        """Optional multi-file helper; not required for this workshop."""
+        raise NotImplementedError(
+            "Process each Markdown file using chunk_file()."
+        )
 
     # -----------------------------------------------------------------------
     # Format-Specific Loaders
@@ -142,32 +136,10 @@ class DocumentChunker:
         chunk_size: int,
         chunk_overlap: int,
     ) -> list[dict]:
-        """
-        Load and chunk a PDF file.
-
-        Uses PyPDFLoader for text extraction followed by
-        RecursiveCharacterTextSplitter for chunking.
-
-        Interview talking point: PDFs from academic papers often contain
-        noisy content (headers, footers, reference lists, equations as
-        text). Post-processing to remove this noise improves retrieval
-        quality significantly.
-
-        Parameters
-        ----------
-        file_path : Path
-        chunk_size : int
-        chunk_overlap : int
-
-        Returns
-        -------
-        list[dict]
-            Raw dicts with 'text' and 'page' keys before conversion
-            to DocumentChunk objects.
-        """
-        # TODO: implement using langchain_community.document_loaders.PyPDFLoader
-        # and langchain.text_splitter.RecursiveCharacterTextSplitter
-        raise NotImplementedError
+        """PDF ingestion is outside the required workshop scope."""
+        raise NotImplementedError(
+            "PDF ingestion is not implemented. Upload a Markdown file."
+        )
 
     def _chunk_markdown(
         self,
@@ -175,30 +147,50 @@ class DocumentChunker:
         chunk_size: int,
         chunk_overlap: int,
     ) -> list[dict]:
-        """
-        Load and chunk a Markdown file.
+        """Split Markdown by headings, then split oversized sections."""
+        text = file_path.read_text(encoding="utf-8-sig")
 
-        Uses MarkdownHeaderTextSplitter first to respect document
-        structure (headers create natural chunk boundaries), then
-        RecursiveCharacterTextSplitter for oversized sections.
+        if not text.strip():
+            return []
 
-        Interview talking point: header-aware splitting preserves
-        semantic coherence better than naive character splitting —
-        a concept within one section stays within one chunk.
+        header_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=[
+                ("#", "Header 1"),
+                ("##", "Header 2"),
+                ("###", "Header 3"),
+            ],
+            strip_headers=False,
+        )
 
-        Parameters
-        ----------
-        file_path : Path
-        chunk_size : int
-        chunk_overlap : int
+        sections = header_splitter.split_text(text)
 
-        Returns
-        -------
-        list[dict]
-            Raw dicts with 'text' and 'header' keys.
-        """
-        # TODO: implement using langchain.text_splitter.MarkdownHeaderTextSplitter
-        raise NotImplementedError
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+        )
+
+        raw_chunks: list[dict] = []
+
+        for section in sections:
+            header = " > ".join(
+                section.metadata[key]
+                for key in ("Header 1", "Header 2", "Header 3")
+                if key in section.metadata
+            )
+
+            for chunk_text in text_splitter.split_text(
+                section.page_content
+            ):
+                if chunk_text.strip():
+                    raw_chunks.append(
+                        {
+                            "text": chunk_text,
+                            "header": header,
+                        }
+                    )
+
+        return raw_chunks
 
     # -----------------------------------------------------------------------
     # Metadata Inference
@@ -209,28 +201,92 @@ class DocumentChunker:
         file_path: Path,
         overrides: dict | None = None,
     ) -> ChunkMetadata:
-        """
-        Infer chunk metadata from filename conventions and apply overrides.
+        """Infer topic and difficulty from the filename, then apply overrides."""
+        topic_names = {
+            "ann": "ANN",
+            "cnn": "CNN",
+            "rnn": "RNN",
+            "lstm": "LSTM",
+            "seq2seq": "Seq2Seq",
+            "autoencoder": "Autoencoder",
+            "som": "SOM",
+            "boltzmannmachine": "BoltzmannMachine",
+            "gan": "GAN",
+        }
 
-        Filename convention (recommended to Corpus Architects):
-          <topic>_<difficulty>.md or <topic>_<difficulty>.pdf
-          e.g. lstm_intermediate.md, alexnet_advanced.pdf
+        difficulties = {
+            "beginner",
+            "intermediate",
+            "advanced",
+        }
 
-        If the filename does not follow this convention, defaults are
-        applied and the Corpus Architect must provide overrides manually.
+        stem = file_path.stem.lower()
+        parts = stem.split("_")
 
-        Parameters
-        ----------
-        file_path : Path
-            Source file path used to infer topic and difficulty.
-        overrides : dict, optional
-            Explicit metadata values that take precedence over inference.
+        difficulty = "beginner"
 
-        Returns
-        -------
-        ChunkMetadata
-            Populated metadata object.
-        """
-        # TODO: implement filename parsing + override merging
-        # Bonus topics: SOM, BoltzmannMachine, GAN → set is_bonus=True
-        raise NotImplementedError
+        if parts[-1] in difficulties:
+            difficulty = parts.pop()
+
+        topic_key = "".join(parts).replace("-", "").replace(" ", "")
+        topic = topic_names.get(topic_key, "Unknown")
+
+        values = {
+            "topic": topic,
+            "difficulty": difficulty,
+            "type": "concept_explanation",
+            "source": file_path.name,
+            "related_topics": [],
+            "is_bonus": False,
+        }
+
+        overrides = dict(overrides or {})
+
+        unknown_fields = set(overrides) - set(values)
+
+        if unknown_fields:
+            raise ValueError(
+                "Unknown metadata fields: "
+                + ", ".join(sorted(unknown_fields))
+            )
+
+        values.update(overrides)
+
+        # Normalize a recognized topic, including one supplied by an override.
+        normalized_topic = (
+            str(values["topic"])
+            .lower()
+            .replace("_", "")
+            .replace("-", "")
+            .replace(" ", "")
+        )
+
+        values["topic"] = topic_names.get(
+            normalized_topic,
+            str(values["topic"]),
+        )
+
+        values["difficulty"] = str(
+            values["difficulty"]
+        ).lower()
+
+        if values["difficulty"] not in difficulties:
+            raise ValueError(
+                "Difficulty must be beginner, intermediate, or advanced."
+            )
+
+        if "is_bonus" not in overrides:
+            values["is_bonus"] = values["topic"] in {
+                "SOM",
+                "BoltzmannMachine",
+                "GAN",
+            }
+
+        if values["topic"] == "Unknown":
+            logger.warning(
+                "Could not infer topic from '{}'. "
+                "Use a topic-based filename or metadata override.",
+                file_path.name,
+            )
+
+        return ChunkMetadata(**values)
